@@ -256,6 +256,7 @@ func handlerFollowing(s *state, cmd command, user database.User) error {
 	// Check if any records came back
 	if len(follows) == 0 {
 		fmt.Printf("%s isn't following anyone!\n", user.Name)
+		return nil
 	}
 
 	// Loop through follows, print feed names
@@ -345,6 +346,33 @@ func handlerReset(s *state, cmd command) error {
 	return nil
 }
 
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	// Verify 1 argument included for URL
+	if len(cmd.args) != 1 {
+		return errors.New("URL required for unfollow command")
+	}
+
+	// Get Feed by URL
+	feed, err := s.db.GetFeedByURL(context.Background(), cmd.args[0])
+	if err != nil {
+		return err
+	}
+
+	// Execute unfollow query
+	params := database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		FeedID: feed.ID,
+	}
+
+	if _, err := s.db.DeleteFeedFollow(context.Background(), params); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s successfully unfollowed %s!\n", user.Name, feed.Name)
+
+	return nil
+}
+
 func handlerUsers(s *state, cmd command) error {
 	// Get users
 	users, err := s.db.GetUsers(context.Background())
@@ -389,6 +417,7 @@ func main() {
 	coms.register("login", handlerLogin)
 	coms.register("register", handlerRegister)
 	coms.register("reset", handlerReset)
+	coms.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 	coms.register("users", handlerUsers)
 
 	// Open connection to database
