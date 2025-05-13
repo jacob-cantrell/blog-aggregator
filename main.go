@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -94,6 +93,41 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	return &rss, nil
 }
 
+func scrapeFeeds(s *state) error {
+	// Get next feed to fetch
+	feed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return err
+	}
+
+	// Mark feed as fetched
+	params := database.MarkFeedFetchedParams{
+		UpdatedAt: time.Now(),
+		LastFetchedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		ID: feed.ID,
+	}
+	if _, err := s.db.MarkFeedFetched(context.Background(), params); err != nil {
+		return err
+	}
+
+	// Fetch the feed
+	rss, err := fetchFeed(context.Background(), feed.Url)
+	if err != nil {
+		return err
+	}
+
+	// Iterate over items in RSSFeed and print titles
+	fmt.Printf("******* RSSFeed - %s *******\n", rss.Channel.Title)
+	for i := range rss.Channel.Item {
+		fmt.Printf("  - %s\n", rss.Channel.Item[i].Title)
+	}
+	fmt.Println("**********************************\n")
+	return nil
+}
+
 func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
 	return func(s *state, cmd command) error {
 		u, err := s.db.GetUser(context.Background(), s.cfg.CurrUsername)
@@ -161,19 +195,23 @@ func handlerAddFeed(s *state, cmd command, user database.User) error {
 }
 
 func handlerAgg(s *state, cmd command) error {
-	r, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	// Verify one argument given
+	if len(cmd.args) != 1 {
+		return errors.New("time between requests argument required")
+	}
+
+	// Convert argument to time.Duration and print message
+	timeBetweenReqs, err := time.ParseDuration(cmd.args[0])
 	if err != nil {
 		return err
 	}
+	fmt.Printf("Collecting feeds every %v\n", timeBetweenReqs)
 
-	// PrettyPrint the RSSFeed struct
-	jsonBytes, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
+	// Scrape feeds
+	ticker := time.NewTicker(timeBetweenReqs)
+	for ; ; <-ticker.C {
+		scrapeFeeds(s)
 	}
-	fmt.Println(string(jsonBytes))
-
-	return nil
 }
 
 func handlerFeeds(s *state, cmd command) error {
