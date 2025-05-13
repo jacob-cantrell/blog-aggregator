@@ -3,9 +3,14 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -29,6 +34,66 @@ type command struct {
 	args []string
 }
 
+type RSSFeed struct {
+	Channel struct {
+		Title       string    `xml:"title"`
+		Link        string    `xml:"link"`
+		Description string    `xml:"description"`
+		Item        []RSSItem `xml:"item"`
+	} `xml:"channel"`
+}
+
+type RSSItem struct {
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
+}
+
+func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
+	// 1. Create a new HTTP request with the given context
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Set the User-Agent header
+	req.Header.Set("User-Agent", "gator")
+
+	// 3. Create an HTTP client and send the request
+	client := http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	// 4. Read the response body
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Unmarshal the XML
+	rss := RSSFeed{}
+	err = xml.Unmarshal(body, &rss)
+	if err != nil {
+		return nil, err
+	}
+
+	// 6. Unescape HTML entities
+	rss.Channel.Title = html.UnescapeString(rss.Channel.Title)
+	rss.Channel.Description = html.UnescapeString(rss.Channel.Description)
+
+	for i := range rss.Channel.Item {
+		rss.Channel.Item[i].Title = html.UnescapeString(rss.Channel.Item[i].Title)
+		rss.Channel.Item[i].Description = html.UnescapeString(rss.Channel.Item[i].Description)
+	}
+
+	// 7. Return the feed
+	return &rss, nil
+}
+
 func (c *commands) register(name string, f func(*state, command) error) {
 	c.com[name] = f
 }
@@ -41,6 +106,92 @@ func (c *commands) run(s *state, cmd command) error {
 	if err := c.com[cmd.name](s, cmd); err != nil {
 		return err
 	}
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	// Check for 2 arguments
+	if len(cmd.args) != 2 {
+		fmt.Println("2 arguments (name & url) required for 'addfeed' command!")
+		os.Exit(1)
+	}
+
+	// Check if a user exists, if exists get var
+	u, err := s.db.GetUser(context.Background(), s.cfg.CurrUsername)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// User doesn't exist
+			fmt.Println("User doesn't exist!")
+			os.Exit(1)
+		}
+		return err
+	}
+
+	// Create params
+	params := database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      cmd.args[0],
+		Url:       cmd.args[1],
+		UserID:    u.ID,
+	}
+
+	// Create feed
+	_, err = s.db.CreateFeed(context.Background(), params)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	r, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return err
+	}
+
+	// PrettyPrint the RSSFeed struct
+	jsonBytes, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(jsonBytes))
+
+	return nil
+}
+
+func handlerFeeds(s *state, cmd command) error {
+	// Retrieve rows from Feeds table
+	f, err := s.db.GetFeeds(context.Background())
+	if err != nil {
+		return err
+	}
+
+	// Check if any feeds in database
+	if len(f) == 0 {
+		fmt.Println("No feeds available!")
+		os.Exit(1)
+	}
+
+	// For each feed, print info
+	fmt.Println("******** FEEDS ********")
+	for i := range f {
+		u, err := s.db.GetUserByID(context.Background(), f[i].UserID)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Name: %s\n", f[i].Name)
+		fmt.Printf("URL: %s\n", f[i].Url)
+		fmt.Printf("User Name: %s\n", u.Name)
+
+		if i != (len(f) - 1) {
+			fmt.Println("-------------------------")
+		}
+	}
+	fmt.Println("******** FEEDS ********")
+
 	return nil
 }
 
@@ -58,11 +209,8 @@ func handlerLogin(s *state, cmd command) error {
 			fmt.Println("User doesn't exist!")
 			os.Exit(1)
 		}
-		// Some other database error
 		return err
 	}
-
-	// If we get here, user exists and we can proceed with login
 
 	// Set username, catch error from SetUser and return if not nil
 	if err := s.cfg.SetUser(cmd.args[0]); err != nil {
@@ -139,7 +287,7 @@ func handlerUsers(s *state, cmd command) error {
 	}
 
 	// Loop through users, print information
-	for i := 0; i < len(users); i++ {
+	for i := range users {
 		if users[i].Name == s.cfg.CurrUsername {
 			fmt.Printf("* %s (current)\n", users[i].Name)
 		} else {
@@ -161,6 +309,9 @@ func main() {
 	s := &state{}
 	s.cfg = &c
 	coms := commands{com: make(map[string]func(*state, command) error)}
+	coms.register("addfeed", handlerAddFeed)
+	coms.register("agg", handlerAgg)
+	coms.register("feeds", handlerFeeds)
 	coms.register("login", handlerLogin)
 	coms.register("register", handlerRegister)
 	coms.register("reset", handlerReset)
