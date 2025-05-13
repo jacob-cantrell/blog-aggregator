@@ -11,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,11 +122,31 @@ func scrapeFeeds(s *state) error {
 	}
 
 	// Iterate over items in RSSFeed and print titles
-	fmt.Printf("******* RSSFeed - %s *******\n", rss.Channel.Title)
+	fmt.Printf("Parsing RSSFeed - %s\n", rss.Channel.Title)
 	for i := range rss.Channel.Item {
-		fmt.Printf("  - %s\n", rss.Channel.Item[i].Title)
+		// Put item into posts table
+		pubDate, _ := time.Parse(time.RFC3339Nano, rss.Channel.Item[i].PubDate)
+		params := database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       rss.Channel.Item[i].Title,
+			Url:         rss.Channel.Item[i].Link,
+			Description: rss.Channel.Item[i].Description,
+			PublishedAt: pubDate,
+			FeedID:      feed.ID,
+		}
+
+		if _, err := s.db.CreatePost(context.Background(), params); err != nil {
+			if strings.Contains(err.Error(), "unique constraint") {
+				return nil
+			} else {
+				log.Printf("Error inserting post: %v", err)
+				return err
+			}
+		}
 	}
-	fmt.Println("**********************************\n")
+	fmt.Println()
 	return nil
 }
 
@@ -212,6 +234,40 @@ func handlerAgg(s *state, cmd command) error {
 	for ; ; <-ticker.C {
 		scrapeFeeds(s)
 	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	// Set limit to default 2, check if argument to change it
+	x := 2
+	if len(cmd.args) == 1 {
+		x, _ = strconv.Atoi(cmd.args[0])
+	}
+	limit := int32(x)
+
+	// Get posts by user
+	params := database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  limit,
+	}
+	posts, err := s.db.GetPostsForUser(context.Background(), params)
+	if err != nil {
+		return err
+	}
+
+	// Print posts
+	if len(posts) == 0 {
+		fmt.Println("No posts to print!")
+	}
+	for i := range posts {
+		fmt.Printf("******* Post %v *******\n", i+1)
+		fmt.Printf("  Title: %s\n", posts[i].Title)
+		fmt.Printf("  Link: %s\n", posts[i].Url)
+		fmt.Printf("  Description: %s\n", posts[i].Description)
+		fmt.Printf("  Publised On: %s\n", posts[i].PublishedAt)
+		fmt.Println("**********************")
+	}
+
+	return nil
 }
 
 func handlerFeeds(s *state, cmd command) error {
@@ -449,6 +505,7 @@ func main() {
 	coms := commands{com: make(map[string]func(*state, command) error)}
 	coms.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	coms.register("agg", handlerAgg)
+	coms.register("browse", middlewareLoggedIn(handlerBrowse))
 	coms.register("feeds", handlerFeeds)
 	coms.register("follow", middlewareLoggedIn(handlerFollow))
 	coms.register("following", middlewareLoggedIn(handlerFollowing))
