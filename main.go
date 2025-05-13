@@ -138,9 +138,23 @@ func handlerAddFeed(s *state, cmd command) error {
 	}
 
 	// Create feed
-	_, err = s.db.CreateFeed(context.Background(), params)
+	feed, err := s.db.CreateFeed(context.Background(), params)
 	if err != nil {
 		return err
+	}
+
+	// Create feed_follows record
+	followParam := database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    u.ID,
+		FeedID:    feed.ID,
+	}
+
+	_, err1 := s.db.CreateFeedFollow(context.Background(), followParam)
+	if err1 != nil {
+		return err1
 	}
 
 	return nil
@@ -191,6 +205,75 @@ func handlerFeeds(s *state, cmd command) error {
 		}
 	}
 	fmt.Println("******** FEEDS ********")
+
+	return nil
+}
+
+func handlerFollow(s *state, cmd command) error {
+	// Verify one argument included
+	if len(cmd.args) != 1 {
+		return errors.New("URL required with follow command")
+	}
+
+	// Get feed by url
+	f, err := s.db.GetFeedByURL(context.Background(), cmd.args[0])
+	if err != nil {
+		return err
+	}
+
+	// Get current user
+	u, err := s.db.GetUser(context.Background(), s.cfg.CurrUsername)
+	if err != nil {
+		return err
+	}
+
+	// Create feed-follow parameters
+	params := database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		UserID:    u.ID,
+		FeedID:    f.ID,
+	}
+
+	// Create feed_follows record
+	ff, err := s.db.CreateFeedFollow(context.Background(), params)
+	if err != nil {
+		return err
+	}
+
+	// Print record information
+	fmt.Println("********** NEW FOLLOW **********")
+	fmt.Printf("Feed Name: %s\n", ff.FeedName)
+	fmt.Printf("User Name: %s\n", ff.UserName)
+	fmt.Println("********** NEW FOLLOW **********")
+
+	return nil
+}
+
+func handlerFollowing(s *state, cmd command) error {
+	// Get current user
+	u, err := s.db.GetUser(context.Background(), s.cfg.CurrUsername)
+	if err != nil {
+		return err
+	}
+
+	// Get feed_follows records by User ID
+	follows, err := s.db.GetFeedFollowsForUser(context.Background(), u.ID)
+	if err != nil {
+		return err
+	}
+
+	// Check if any records came back
+	if len(follows) == 0 {
+		fmt.Printf("%s isn't following anyone!\n", u.Name)
+	}
+
+	// Loop through follows, print feed names
+	fmt.Printf("%s is following:\n", u.Name)
+	for i := range follows {
+		fmt.Printf("  - %s\n", follows[i].FeedName)
+	}
 
 	return nil
 }
@@ -312,6 +395,8 @@ func main() {
 	coms.register("addfeed", handlerAddFeed)
 	coms.register("agg", handlerAgg)
 	coms.register("feeds", handlerFeeds)
+	coms.register("follow", handlerFollow)
+	coms.register("following", handlerFollowing)
 	coms.register("login", handlerLogin)
 	coms.register("register", handlerRegister)
 	coms.register("reset", handlerReset)
