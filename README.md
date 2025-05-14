@@ -3,7 +3,7 @@
 PostgreSQL version 15.11 required for running.\
 Golang version go1.23.6 required.\
 
-Commands registered in blog-aggregator:\
+Commands registered in blog-aggregator/gator:\
 `reset` - deletes all user data from users table (cascades down to feed -> follows -> posts)\
 `register <username>` - registers a user and logs them in\
 `login <username>` - logs in a user that is not the current user\
