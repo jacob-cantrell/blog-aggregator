@@ -1,4 +1,4 @@
-# blog-aggregator
+# blog-aggregator (or gator)
 
 PostgreSQL version 15.11 required for running.\
 Golang version go1.23.6 required.\
