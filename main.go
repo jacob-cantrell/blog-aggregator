@@ -340,7 +340,6 @@ func handlerFollow(s *state, cmd command, user database.User) error {
 }
 
 func handlerFollowing(s *state, cmd command, user database.User) error {
-
 	// Get feed_follows records by User ID
 	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
 	if err != nil {
